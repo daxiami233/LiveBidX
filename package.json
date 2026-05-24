@@ -1,0 +1,20 @@
+{
+  "name": "livebidx",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "backend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev -w backend",
+    "dev:merchant": "npm run dev -w apps/merchant",
+    "dev:mobile": "npm run dev -w apps/mobile",
+    "build:backend": "npm run build -w backend",
+    "build:merchant": "npm run build -w apps/merchant",
+    "build:mobile": "npm run build -w apps/mobile",
+    "build": "npm run build:backend && npm run build:merchant && npm run build:mobile"
+  }
+}

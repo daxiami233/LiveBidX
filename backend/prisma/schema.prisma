@@ -1,0 +1,228 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  HOST
+}
+
+enum ProductStatus {
+  DRAFT
+  REVIEWING
+  ACTIVE
+  ARCHIVED
+}
+
+enum AuctionStatus {
+  PENDING
+  RUNNING
+  ENDED
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  SHIPPED
+  COMPLETED
+  CANCELLED
+}
+
+enum LiveSessionStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  nickname     String
+  email        String   @unique
+  passwordHash String
+  passwordSalt String
+  role         UserRole @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  products       Product[]       @relation("HostProducts")
+  hostedAuctions Auction[]       @relation("HostAuctions")
+  liveSessions   LiveSession[]   @relation("HostLiveSessions")
+  bids           Bid[]
+  wonAuctions    Auction[]       @relation("HighestBidder")
+  orders         Order[]
+  addresses      Address[]
+  liveComments   LiveComment[]
+
+  @@index([role])
+}
+
+model Address {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  phone     String
+  detail    String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([userId, isDefault])
+}
+
+model Product {
+  id           String        @id @default(cuid())
+  hostId       String
+  title        String
+  category     String
+  imageUrl     String
+  description  String?
+  startPrice   Int
+  deposit      Int
+  minIncrement Int
+  capPrice     Int?
+  durationSec  Int           @default(300)
+  autoExtendSec Int          @default(15)
+  plannedAt    DateTime?
+  estimate     String?
+  status       ProductStatus @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  host     User      @relation("HostProducts", fields: [hostId], references: [id])
+  auctions Auction[]
+  orders   Order[]
+  liveItems LiveProduct[]
+
+  @@index([hostId])
+  @@index([status])
+}
+
+model LiveSession {
+  id                     String            @id @default(cuid())
+  hostId                 String
+  title                  String
+  roomId                 String            @unique
+  status                 LiveSessionStatus @default(SCHEDULED)
+  scheduledAt            DateTime
+  startedAt              DateTime?
+  endedAt                DateTime?
+  coverImage             String?
+  tags                   String[]
+  onlineCount            Int               @default(0)
+  networkStatus          String            @default("良好")
+  streamStatus           String            @default("未推流")
+  currentProductId       String?
+  activeAuctionProductId String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  host     User          @relation("HostLiveSessions", fields: [hostId], references: [id])
+  products LiveProduct[]
+  auctions Auction[]
+  comments LiveComment[]
+
+  @@index([hostId])
+  @@index([status])
+}
+
+model LiveProduct {
+  id            String   @id @default(cuid())
+  liveSessionId String
+  productId     String
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  liveSession LiveSession @relation(fields: [liveSessionId], references: [id])
+  product     Product     @relation(fields: [productId], references: [id])
+
+  @@unique([liveSessionId, productId])
+  @@index([productId])
+  @@index([liveSessionId, sortOrder])
+}
+
+model LiveComment {
+  id            String   @id @default(cuid())
+  liveSessionId String
+  userId        String
+  content       String
+  createdAt     DateTime @default(now())
+
+  liveSession LiveSession @relation(fields: [liveSessionId], references: [id])
+  user        User        @relation(fields: [userId], references: [id])
+
+  @@index([liveSessionId, createdAt])
+  @@index([userId])
+}
+
+model Auction {
+  id              String        @id @default(cuid())
+  productId       String
+  hostId          String
+  liveSessionId   String?
+  status          AuctionStatus @default(PENDING)
+  startPrice      Int
+  currentPrice    Int
+  minIncrement    Int
+  deposit         Int
+  startTime       DateTime?
+  endTime         DateTime?
+  highestBidderId String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  product       Product @relation(fields: [productId], references: [id])
+  host          User    @relation("HostAuctions", fields: [hostId], references: [id])
+  liveSession   LiveSession? @relation(fields: [liveSessionId], references: [id])
+  highestBidder User?   @relation("HighestBidder", fields: [highestBidderId], references: [id])
+  bids          Bid[]
+  order         Order?
+
+  @@index([hostId])
+  @@index([productId])
+  @@index([liveSessionId])
+  @@index([status])
+}
+
+model Bid {
+  id        String   @id @default(cuid())
+  auctionId String
+  userId    String
+  amount    Int
+  createdAt DateTime @default(now())
+
+  auction Auction @relation(fields: [auctionId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([auctionId])
+  @@index([userId])
+  @@index([amount])
+}
+
+model Order {
+  id        String      @id @default(cuid())
+  auctionId String      @unique
+  productId String
+  buyerId   String
+  amount    Int
+  status    OrderStatus @default(PENDING_PAYMENT)
+  shippingCompany String?
+  trackingNo String?
+  shippedAt DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  auction Auction @relation(fields: [auctionId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+  buyer   User    @relation(fields: [buyerId], references: [id])
+
+  @@index([buyerId])
+  @@index([status])
+}
