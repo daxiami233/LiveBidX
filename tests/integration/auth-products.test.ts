@@ -1,6 +1,13 @@
+import { createHmac } from "node:crypto";
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { app, auth, createAuction, createProduct, createUser, describeDb, prisma, resetDb } from "../helpers/integration.js";
+
+function signedToken(payload: Record<string, unknown>) {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", process.env.AUTH_SECRET ?? "livebidx-dev-secret").update(encoded).digest("base64url");
+  return `${encoded}.${signature}`;
+}
 
 describeDb("auth API", () => {
   beforeEach(resetDb);
@@ -45,6 +52,20 @@ describeDb("auth API", () => {
     await request(app).post("/api/auth/login").send({ email: "login@test.local", password: "wrong" }).expect(401);
     await request(app).post("/api/auth/login").send({ email: "login@test.local" }).expect(400);
   });
+
+  it("rejects missing, tampered and wrong-role tokens on protected routes", async () => {
+    const host = await createUser("HOST");
+    const customer = await createUser("CUSTOMER");
+    const tampered = `${host.token.slice(0, -1)}x`;
+    const expired = signedToken({ userId: customer.user.id, role: "CUSTOMER", exp: Date.now() - 1 });
+
+    await request(app).get("/api/auth/me").expect(401);
+    await request(app).get("/api/auth/me").set(auth(tampered)).expect(401);
+    await request(app).get("/api/auth/me").set(auth(expired)).expect(401);
+    await request(app).post("/api/products").set(auth(customer.token)).send({}).expect(403);
+    await request(app).post("/api/auctions").set(auth(customer.token)).send({}).expect(403);
+    await request(app).get("/api/mobile/live-rooms").set(auth(host.token)).expect(403);
+  });
 });
 
 describeDb("product API", () => {
@@ -88,6 +109,33 @@ describeDb("product API", () => {
     await request(app).post("/api/products").set(auth(host.token)).send({ ...valid, capPrice: 100 }).expect(400);
     await request(app).post("/api/products").set(auth(host.token)).send({ ...valid, capPrice: 119 }).expect(400);
     await request(app).post("/api/products").set(auth(host.token)).send({ ...valid, capPrice: 120 }).expect(201);
+  });
+
+  it("updates products and validates PATCH cap price rules", async () => {
+    const { user, token } = await createUser("HOST");
+    const product = await createProduct(user.id, { title: "旧标题", startPrice: 100, minIncrement: 20, capPrice: 150 });
+
+    const updated = await request(app)
+      .patch(`/api/products/${product.id}`)
+      .set(auth(token))
+      .send({ title: "新标题", startPrice: 120, minIncrement: 30, capPrice: 180 })
+      .expect(200);
+    expect(updated.body.product.title).toBe("新标题");
+    expect(updated.body.product.startPrice).toBe(120);
+    expect(updated.body.product.minIncrement).toBe(30);
+    expect(updated.body.product.capPrice).toBe(180);
+
+    await request(app).patch(`/api/products/${product.id}`).set(auth(token)).send({ capPrice: 120 }).expect(400);
+    await request(app).patch(`/api/products/${product.id}`).set(auth(token)).send({ capPrice: 149 }).expect(400);
+    await request(app).patch(`/api/products/${product.id}`).set(auth(token)).send({ capPrice: 150 }).expect(200);
+  });
+
+  it("rejects product PATCH while a related auction is running", async () => {
+    const { user, token } = await createUser("HOST");
+    const product = await createProduct(user.id);
+    await createAuction(user.id, product.id);
+
+    await request(app).patch(`/api/products/${product.id}`).set(auth(token)).send({ title: "不能改" }).expect(409);
   });
 
   it("hard deletes products without auction history and archives products with history", async () => {

@@ -10,7 +10,8 @@ export const isTestDatabase = Boolean(process.env.DATABASE_URL?.includes("test")
 export const describeDb = isTestDatabase ? describe : describe.skip;
 
 export const { prisma } = await import("../../backend/src/config/prisma.js");
-export const { app, runExpiredAuctionSweep, startExpiredAuctionScheduler, shutdown } = await import("../../backend/src/server.js");
+export const { app, server, runExpiredAuctionSweep, startExpiredAuctionScheduler, shutdown } = await import("../../backend/src/server.js");
+export const { getRealtimeServer, initializeRealtime, resetRateLimits } = await import("../../backend/src/realtime/auctionGateway.js");
 
 export async function resetDb() {
   if (!isTestDatabase) return;

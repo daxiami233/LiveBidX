@@ -31,6 +31,17 @@ describeDb("auction API", () => {
     expect(durationMs).toBe(60_000);
   });
 
+  it("creates standalone auctions without live-session side effects", async () => {
+    const { user, token } = await createUser("HOST");
+    const product = await createProduct(user.id);
+
+    const response = await request(app).post("/api/auctions").set(auth(token)).send({ productId: product.id }).expect(201);
+
+    expect(response.body.auction.liveSessionId).toBeNull();
+    expect(response.body.auction.productId).toBe(product.id);
+    expect(response.body.auction.status).toBe("RUNNING");
+  });
+
   it("rejects invalid auction creation cases", async () => {
     const host = await createUser("HOST");
     const customer = await createUser("CUSTOMER");
@@ -144,5 +155,47 @@ describeDb("auction API", () => {
 
     const cancelled = await createAuction(host.user.id, product.id, null, { status: "CANCELLED" });
     await request(app).post(`/api/auctions/${cancelled.id}/bids`).set(auth(buyer.token)).send({ amount: 120 }).expect(400);
+  });
+
+  it("rejects impossible capPrice cliffs through HTTP bidding", async () => {
+    const host = await createUser("HOST");
+    const buyer = await createUser("CUSTOMER");
+    const product = await createProduct(host.user.id, { startPrice: 100, minIncrement: 50, capPrice: 120 });
+    const auction = await createAuction(host.user.id, product.id, null, {
+      currentPrice: 100,
+      minIncrement: 50,
+      capPrice: 120
+    });
+
+    const response = await request(app).post(`/api/auctions/${auction.id}/bids`).set(auth(buyer.token)).send({ amount: 300 }).expect(400);
+    expect(response.body.message).toContain("出价需不低于 150");
+    await expect(prisma.bid.count({ where: { auctionId: auction.id } })).resolves.toBe(0);
+  });
+
+  it("settles expired auctions on HTTP bid and detail fetch", async () => {
+    const host = await createUser("HOST");
+    const buyer = await createUser("CUSTOMER");
+    const product = await createProduct(host.user.id);
+    const expiredEnd = new Date(Date.now() - 30_000);
+    const expiredByBid = await createAuction(host.user.id, product.id, null, {
+      endTime: expiredEnd,
+      highestBidderId: buyer.user.id,
+      currentPrice: 180
+    });
+
+    await request(app).post(`/api/auctions/${expiredByBid.id}/bids`).set(auth(buyer.token)).send({ amount: 200 }).expect(400);
+    const settledByBid = await prisma.auction.findUnique({ where: { id: expiredByBid.id }, include: { order: true } });
+    expect(settledByBid?.status).toBe("ENDED");
+    expect(settledByBid?.endTime?.getTime()).toBe(expiredEnd.getTime());
+    expect(settledByBid?.order?.amount).toBe(180);
+
+    const expiredByGet = await createAuction(host.user.id, product.id, null, {
+      endTime: expiredEnd,
+      highestBidderId: null,
+      currentPrice: 100
+    });
+    const response = await request(app).get(`/api/auctions/${expiredByGet.id}`).set(auth(host.token)).expect(200);
+    expect(response.body.auction.status).toBe("ENDED");
+    await expect(prisma.order.findUnique({ where: { auctionId: expiredByGet.id } })).resolves.toBeNull();
   });
 });

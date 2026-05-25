@@ -133,4 +133,27 @@ describeDb("mobile API", () => {
     expect(updated.body.addresses.find((item: { id: string }) => item.id === first.id).isDefault).toBe(false);
     expect(updated.body.addresses.find((item: { id: string }) => item.id === second.id).isDefault).toBe(true);
   });
+
+  it("labels won and lost bid history correctly", async () => {
+    const host = await createUser("HOST");
+    const buyer = await createUser("CUSTOMER");
+    const winner = await createUser("CUSTOMER");
+    const wonProduct = await createProduct(host.user.id, { title: "拍中商品" });
+    const lostProduct = await createProduct(host.user.id, { title: "未拍中商品" });
+    const wonAuction = await createAuction(host.user.id, wonProduct.id, null, { status: "ENDED", highestBidderId: buyer.user.id, currentPrice: 180 });
+    const lostAuction = await createAuction(host.user.id, lostProduct.id, null, { status: "ENDED", highestBidderId: winner.user.id, currentPrice: 200 });
+    await prisma.bid.createMany({
+      data: [
+        { auctionId: wonAuction.id, userId: buyer.user.id, amount: 180 },
+        { auctionId: lostAuction.id, userId: buyer.user.id, amount: 160 },
+        { auctionId: lostAuction.id, userId: winner.user.id, amount: 200 }
+      ]
+    });
+
+    const history = await request(app).get("/api/mobile/bid-history").set(auth(buyer.token)).expect(200);
+    const won = history.body.items.find((item: { id: string }) => item.id === wonAuction.id);
+    const lost = history.body.items.find((item: { id: string }) => item.id === lostAuction.id);
+    expect(won.status).toBe("已拍中");
+    expect(lost.status).toBe("未拍中");
+  });
 });
