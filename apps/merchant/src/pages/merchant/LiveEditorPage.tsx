@@ -9,7 +9,6 @@ import type { LiveForm, LiveSession, Notice, Product } from "../../types/merchan
 import { money } from "../../utils/money";
 
 const tagOptions = ["水果", "海鲜", "冷链", "家居", "新品", "福利", "复购", "限时"];
-const queueStatusOrder = ["即将开拍", "待开拍", "讲解中", "竞拍中", "已成交", "流拍", "已取消", "已下架"];
 const queuePageSize = 4;
 const addablePageSize = 5;
 
@@ -27,10 +26,11 @@ type LiveEditorPageProps = {
   liveSessions: LiveSession[];
   saveLive: (id: string | undefined, form: LiveForm, productIds?: string[]) => Promise<boolean>;
   addProductToLive: (productId: string, liveId?: string) => void;
+  removeProductFromLive: (productId: string, liveId?: string) => void;
   onNotice: (text: string, tone?: Notice["tone"]) => void;
 };
 
-export function LiveEditorPage({ products, liveSessions, saveLive, addProductToLive, onNotice }: LiveEditorPageProps) {
+export function LiveEditorPage({ products, liveSessions, saveLive, addProductToLive, removeProductFromLive, onNotice }: LiveEditorPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { id } = useParams();
@@ -43,16 +43,16 @@ export function LiveEditorPage({ products, liveSessions, saveLive, addProductToL
   const selectedProductIds = id ? live?.productIds ?? [] : draftProductIds;
   const liveProducts = useMemo(
     () =>
-      products
-        .filter((item) => selectedProductIds.includes(item.id))
-        .sort((a, b) => queueStatusOrder.indexOf(a.status) - queueStatusOrder.indexOf(b.status)),
+      selectedProductIds
+        .map((productId) => products.find((item) => item.id === productId))
+        .filter(Boolean) as Product[],
     [products, selectedProductIds]
   );
   const liveStreamingProductIds = useMemo(
     () => new Set(liveSessions.filter((item) => item.status === "直播中").flatMap((item) => item.productIds)),
     [liveSessions]
   );
-  const canAddProducts = id ? live?.status === "待开播" : true;
+  const canManageProducts = id ? Boolean(live && live.status !== "已结束") : true;
   const categoryOptions = useMemo(() => ["全部分类", ...Array.from(new Set(products.map((item) => item.category).filter(Boolean)))], [products]);
   const addableProducts = useMemo(
     () =>
@@ -168,7 +168,7 @@ export function LiveEditorPage({ products, liveSessions, saveLive, addProductToL
             </span>
             <div>
               <h2>拍品队列</h2>
-              <p>{canAddProducts ? "为直播配置竞拍商品，保存后自动生成直播间并绑定队列。" : "直播中不可调整拍品队列。"}</p>
+              <p>{canManageProducts ? "待开播和直播中都可调整拍品队列；正在拍卖的商品不可移除。" : "已结束直播仅保留历史拍品记录。"}</p>
             </div>
           </div>
           <div className="editor-queue-summary">
@@ -186,11 +186,25 @@ export function LiveEditorPage({ products, liveSessions, saveLive, addProductToL
                   </div>
                   <div className="queue-item-actions">
                     <Tag>{item.status}</Tag>
-                    {!id && (
-                      <button type="button" onClick={() => setDraftProductIds((current) => current.filter((productId) => productId !== item.id))}>
-                        移除
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      disabled={!canManageProducts || live?.activeAuctionProductId === item.id}
+                      title={live?.activeAuctionProductId === item.id ? "正在拍卖的商品不能移除" : "从队列移除"}
+                      onClick={() => {
+                        if (!canManageProducts) {
+                          onNotice("已结束直播不能移除拍品", "warning");
+                          return;
+                        }
+                        if (live?.activeAuctionProductId === item.id) {
+                          onNotice("正在拍卖的商品不能移除", "warning");
+                          return;
+                        }
+                        if (id) removeProductFromLive(item.id, id);
+                        else setDraftProductIds((current) => current.filter((productId) => productId !== item.id));
+                      }}
+                    >
+                      移除
+                    </button>
                   </div>
                 </article>
               ))
@@ -219,10 +233,10 @@ export function LiveEditorPage({ products, liveSessions, saveLive, addProductToL
                   <span>{money(item.startPrice)} 起拍</span>
                 </div>
                 <button
-                  disabled={!canAddProducts}
+                  disabled={!canManageProducts}
                   onClick={() => {
-                    if (!canAddProducts) {
-                      onNotice("直播中不可添加拍品", "warning");
+                    if (!canManageProducts) {
+                      onNotice("已结束直播不能添加拍品", "warning");
                       return;
                     }
                     if (id) addProductToLive(item.id, id);

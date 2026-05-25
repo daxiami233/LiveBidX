@@ -1400,6 +1400,12 @@ p {
   font-weight: 800;
 }
 
+.live-ended-dialog > svg {
+  display: block;
+  margin: 0 auto 10px;
+  color: #ff244d;
+}
+
 .result-product {
   display: grid;
   grid-template-columns: 120px 1fr;
@@ -1818,6 +1824,17 @@ p {
   min-height: 50px;
   margin-top: 0;
   font-size: 17px;
+}
+
+.pay-footer-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.pay-footer .ghost-action {
+  color: #667085;
+  background: #f2f4f7;
+  box-shadow: none;
 }
 
 .bid-history-card {

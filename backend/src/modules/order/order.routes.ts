@@ -4,10 +4,12 @@ import { requireAuth } from "../../middleware/auth.js";
 import { requireRole } from "../../middleware/role.js";
 import { emitAuctionState } from "../../realtime/auctionGateway.js";
 import { asyncHandler } from "../../utils/http.js";
+import { OrderServiceError, payCustomerOrder } from "./order.service.js";
 
 const router = Router();
 
 const orderInclude = {
+  address: true,
   product: true,
   auction: {
     include: {
@@ -76,6 +78,24 @@ router.post(
   requireAuth,
   requireRole("CUSTOMER"),
   asyncHandler(async (req, res) => {
+    try {
+      const paidOrder = await payCustomerOrder(req.params.id, res.locals.user.id, orderInclude);
+      res.json({ order: paidOrder, message: paidOrder.status === "PAID" ? "支付成功" : "订单已支付" });
+    } catch (error) {
+      if (error instanceof OrderServiceError) {
+        res.status(error.statusCode).json({ message: error.message });
+        return;
+      }
+      throw error;
+    }
+  })
+);
+
+router.post(
+  "/:id/cancel",
+  requireAuth,
+  requireRole("CUSTOMER"),
+  asyncHandler(async (req, res) => {
     const order = await prisma.order.findFirst({
       where: { id: req.params.id, buyerId: res.locals.user.id },
       include: orderInclude
@@ -85,26 +105,19 @@ router.post(
       res.status(404).json({ message: "订单不存在或无权限" });
       return;
     }
-
-    if (order.status === "CANCELLED") {
-      res.status(409).json({ message: "订单已取消，无法支付" });
+    if (order.status !== "PENDING_PAYMENT") {
+      res.status(409).json({ message: "只有待支付订单可以取消" });
       return;
     }
 
-    if (order.status === "PAID") {
-      res.json({ order, message: "订单已支付" });
-      return;
-    }
-
-    const paidOrder = await prisma.order.update({
+    const cancelled = await prisma.order.update({
       where: { id: order.id },
-      data: { status: "PAID" },
+      data: { status: "CANCELLED" },
       include: orderInclude
     });
 
-    await emitAuctionState(paidOrder.auctionId);
-
-    res.json({ order: paidOrder, message: "支付成功" });
+    await emitAuctionState(cancelled.auctionId);
+    res.json({ order: cancelled, message: "订单已取消" });
   })
 );
 

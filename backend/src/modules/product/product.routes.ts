@@ -37,13 +37,21 @@ router.get(
           ? { equals: "ACTIVE" as const }
           : undefined;
 
-    const products = await prisma.product.findMany({
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize ?? 50)));
+    const where = { hostId: res.locals.user.id, status };
+    const [total, products] = await Promise.all([
+      prisma.product.count({ where }),
+      prisma.product.findMany({
       where: { hostId: res.locals.user.id, status },
       orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
       include: productInclude
-    });
+    })
+    ]);
 
-    res.json({ products });
+    res.json({ products, pagination: { page, pageSize, total } });
   })
 );
 
@@ -91,6 +99,14 @@ router.post(
       res.status(400).json({ message: "起拍价、保证金和加价幅度必须是有效数字" });
       return;
     }
+    if (capPrice !== null && capPrice <= startPrice) {
+      res.status(400).json({ message: "封顶价必须大于起拍价" });
+      return;
+    }
+    if (capPrice !== null && capPrice < startPrice + minIncrement) {
+      res.status(400).json({ message: "封顶价必须不低于起拍价加一个加价幅度" });
+      return;
+    }
 
     const product = await prisma.product.create({
       data: {
@@ -131,6 +147,18 @@ router.patch(
     }
     if (product.auctions.length) {
       res.status(409).json({ message: "正在竞拍的商品不能修改核心规则" });
+      return;
+    }
+
+    const nextStartPrice = req.body.startPrice === undefined ? product.startPrice : toInt(req.body.startPrice);
+    const nextMinIncrement = req.body.minIncrement === undefined && req.body.increment === undefined ? product.minIncrement : toInt(req.body.minIncrement ?? req.body.increment);
+    const nextCapPrice = req.body.capPrice === undefined ? product.capPrice : toInt(req.body.capPrice);
+    if (nextCapPrice !== null && nextCapPrice <= nextStartPrice) {
+      res.status(400).json({ message: "封顶价必须大于起拍价" });
+      return;
+    }
+    if (nextCapPrice !== null && nextCapPrice < nextStartPrice + nextMinIncrement) {
+      res.status(400).json({ message: "封顶价必须不低于起拍价加一个加价幅度" });
       return;
     }
 
@@ -207,7 +235,7 @@ router.delete(
     if (product.auctions.length > 0) {
       const archived = await prisma.product.update({
         where: { id: product.id },
-        data: { status: "DRAFT" }
+        data: { status: "ARCHIVED" }
       });
 
       res.json({ product: archived, mode: "ARCHIVED", message: "商品已有竞拍记录，已下架并保留历史数据" });

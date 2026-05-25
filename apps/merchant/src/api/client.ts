@@ -18,7 +18,7 @@ type BackendUserSummary = {
 
 export type BackendOrderStatus = "PENDING_PAYMENT" | "PAID" | "SHIPPED" | "COMPLETED" | "CANCELLED";
 export type BackendProductStatus = "DRAFT" | "REVIEWING" | "ACTIVE" | "ARCHIVED";
-export type BackendAuctionStatus = "PENDING" | "RUNNING" | "ENDED";
+export type BackendAuctionStatus = "PENDING" | "RUNNING" | "ENDED" | "CANCELLED";
 export type BackendLiveStatus = "SCHEDULED" | "LIVE" | "ENDED";
 
 export type BackendBid = {
@@ -39,6 +39,8 @@ export type BackendAuction = {
   startPrice: number;
   currentPrice: number;
   minIncrement: number;
+  capPrice?: number | null;
+  autoExtendSec: number;
   deposit: number;
   startTime?: string | null;
   endTime?: string | null;
@@ -102,12 +104,20 @@ export type BackendOrder = {
   auctionId: string;
   productId: string;
   buyerId: string;
+  addressId?: string | null;
   amount: number;
   status: BackendOrderStatus;
   createdAt: string;
   updatedAt: string;
   product?: BackendProduct;
   auction?: BackendAuction;
+  address?: {
+    id: string;
+    name: string;
+    phone: string;
+    detail: string;
+    isDefault: boolean;
+  } | null;
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:3000/api`;
@@ -211,6 +221,10 @@ export function addProductToLiveSession(liveId: string, productId: string) {
     method: "POST",
     body: JSON.stringify({ productId })
   }, true);
+}
+
+export function removeProductFromLiveSession(liveId: string, productId: string) {
+  return request<{ live: BackendLiveSession }>(`/lives/${liveId}/products/${productId}`, { method: "DELETE" }, true);
 }
 
 export function startLiveById(id: string) {

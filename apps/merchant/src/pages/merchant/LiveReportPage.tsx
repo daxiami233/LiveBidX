@@ -21,6 +21,7 @@ export function LiveReportPage({ liveSessions, products }: LiveReportPageProps) 
   const soldProducts = liveProducts.filter((item) => item.status === "已成交");
   const revenue = soldProducts.reduce((sum, item) => sum + item.currentPrice, 0);
   const orders = soldProducts.length;
+  const hasRevenueTrend = revenue > 0;
   const conversion = liveProducts.length ? `${Math.round((soldProducts.length / liveProducts.length) * 100)}%` : "--";
 
   if (!live) {
@@ -58,21 +59,25 @@ export function LiveReportPage({ liveSessions, products }: LiveReportPageProps) 
             <div className="panel-head">
               <h2>成交趋势</h2>
             </div>
-            <div className="chart-with-y-axis">
-              <div className="chart-y-axis">
-                {["成交额", money(revenue), "0"].map((label) => (
-                  <span key={label}>{label}</span>
-                ))}
-              </div>
-              <div className="chart-plot">
-                <div className="empty-block table-empty">暂无成交趋势时间序列数据</div>
-                <div className="chart-axis">
-                  {["开播", "30 分钟", "60 分钟", "90 分钟", "结束"].map((label) => (
+            {hasRevenueTrend ? (
+              <div className="chart-with-y-axis">
+                <div className="chart-y-axis">
+                  {["成交额", money(revenue), "0"].map((label) => (
                     <span key={label}>{label}</span>
                   ))}
                 </div>
+                <div className="chart-plot">
+                  <div className="empty-block table-empty">暂无成交趋势时间序列数据</div>
+                  <div className="chart-axis">
+                    {["开播", "30 分钟", "60 分钟", "90 分钟", "结束"].map((label) => (
+                      <span key={label}>{label}</span>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="chart-empty-none">无</div>
+            )}
           </section>
           <section className="panel live-report-insight">
             <div className="panel-head">

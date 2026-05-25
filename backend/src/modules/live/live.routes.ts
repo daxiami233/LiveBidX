@@ -2,7 +2,7 @@ import { Router } from "express";
 import { prisma } from "../../config/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { requireRole } from "../../middleware/role.js";
-import { emitLiveSessions, emitLiveSessionState } from "../../realtime/auctionGateway.js";
+import { emitLiveEnded, emitLiveSessions, emitLiveSessionState } from "../../realtime/auctionGateway.js";
 import { asyncHandler, parseTags, toDate } from "../../utils/http.js";
 import { closeAuction } from "../auction/auction.service.js";
 
@@ -30,6 +30,18 @@ function roomId() {
 
 function productIdsOf(live: { products?: Array<{ productId: string }> }) {
   return live.products?.map((item) => item.productId) ?? [];
+}
+
+function nextCurrentProductIdAfterRemoval(
+  live: { products?: Array<{ productId: string }>; auctions?: Array<{ productId: string; status: string }> },
+  removedProductId: string
+) {
+  const unavailableProductIds = new Set(
+    (live.auctions ?? [])
+      .filter((auction) => auction.status === "RUNNING" || auction.status === "ENDED")
+      .map((auction) => auction.productId)
+  );
+  return productIdsOf(live).find((productId) => productId !== removedProductId && !unavailableProductIds.has(productId)) ?? null;
 }
 
 async function loadLive(id: string, hostId: string) {
@@ -187,6 +199,10 @@ router.delete(
       res.status(409).json({ message: "直播中不能删除，请先结束直播" });
       return;
     }
+    if (live.auctions.length) {
+      res.status(409).json({ message: "该直播已有竞拍记录，不能删除，可在已结束列表查看历史数据" });
+      return;
+    }
 
     await prisma.$transaction([
       prisma.liveProduct.deleteMany({ where: { liveSessionId: live.id } }),
@@ -209,8 +225,12 @@ router.post(
       res.status(404).json({ message: "直播场次不存在或无权限" });
       return;
     }
-    if (live.status !== "SCHEDULED") {
-      res.status(409).json({ message: "只有待开播直播可以添加拍品" });
+    if (live.status === "ENDED") {
+      res.status(409).json({ message: "已结束直播不能添加拍品" });
+      return;
+    }
+    if (productIdsOf(live).includes(productId)) {
+      res.status(409).json({ message: "该商品已在本场直播拍品队列中" });
       return;
     }
 
@@ -243,6 +263,9 @@ router.post(
     }
 
     await emitLiveSessions(res.locals.user.id);
+    if (updated.status === "LIVE") {
+      await emitLiveSessionState(updated.id);
+    }
     res.status(201).json({ live: updated });
   })
 );
@@ -257,22 +280,28 @@ router.delete(
       res.status(404).json({ message: "直播场次不存在或无权限" });
       return;
     }
-    if (live.status !== "SCHEDULED") {
-      res.status(409).json({ message: "只有待开播直播可以移除拍品" });
+    if (live.status === "ENDED") {
+      res.status(409).json({ message: "已结束直播不能移除拍品" });
+      return;
+    }
+    if (live.activeAuctionProductId === req.params.productId || live.auctions.some((auction) => auction.productId === req.params.productId && auction.status === "RUNNING")) {
+      res.status(409).json({ message: "正在拍卖的商品不能移除" });
       return;
     }
 
     await prisma.liveProduct.deleteMany({ where: { liveSessionId: live.id, productId: req.params.productId } });
-    const nextProductIds = productIdsOf(live).filter((id) => id !== req.params.productId);
     const updated = await prisma.liveSession.update({
       where: { id: live.id },
       data: {
-        currentProductId: live.currentProductId === req.params.productId ? nextProductIds[0] ?? null : live.currentProductId
+        currentProductId: live.currentProductId === req.params.productId ? nextCurrentProductIdAfterRemoval(live, req.params.productId) : live.currentProductId
       },
       include: liveInclude
     });
 
     await emitLiveSessions(res.locals.user.id);
+    if (updated.status === "LIVE") {
+      await emitLiveSessionState(updated.id);
+    }
     res.json({ live: updated });
   })
 );
@@ -289,6 +318,10 @@ router.post(
     }
     if (live.status === "LIVE") {
       res.json({ live });
+      return;
+    }
+    if (live.status === "ENDED") {
+      res.status(409).json({ message: "已结束的直播不能重新开播" });
       return;
     }
 
@@ -335,17 +368,19 @@ router.post(
       select: { id: true }
     });
 
+    const endedAt = new Date();
     for (const auction of runningAuctions) {
-      await closeAuction(auction.id);
+      await closeAuction(auction.id, endedAt);
     }
 
     const updated = await prisma.liveSession.update({
       where: { id: live.id },
       data: {
         status: "ENDED",
-        endedAt: new Date(),
+        endedAt,
         activeAuctionProductId: null,
         currentProductId: null,
+        onlineCount: 0,
         streamStatus: "未推流"
       },
       include: liveInclude
@@ -353,6 +388,7 @@ router.post(
 
     await emitLiveSessions(res.locals.user.id);
     await emitLiveSessionState(updated.id);
+    await emitLiveEnded(updated.id);
     res.json({ live: updated });
   })
 );

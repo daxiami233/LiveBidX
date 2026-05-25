@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Truck } from "lucide-react";
 import { Pagination } from "../ui/Pagination";
 import { Tag } from "../ui/Tag";
-import type { ModalName, Notice, Product } from "../../types/merchant";
+import type { LiveSession, ModalName, Notice, Product } from "../../types/merchant";
 import { money } from "../../utils/money";
 
 const modalPageSize = 5;
@@ -12,13 +12,14 @@ type MerchantModalProps = {
   product: Product | null;
   orderId: string | null;
   products: Product[];
+  currentLive: LiveSession | null;
   close: () => void;
   onNotice: (text: string, tone?: Notice["tone"]) => void;
   addProductToLive: (productId: string) => void;
   shipOrder: (orderId: string, payload: { company: string; trackingNo: string }) => void;
 };
 
-export function MerchantModal({ modal, product, orderId, products, close, onNotice, addProductToLive, shipOrder }: MerchantModalProps) {
+export function MerchantModal({ modal, product, orderId, products, currentLive, close, onNotice, addProductToLive, shipOrder }: MerchantModalProps) {
   const [shipForm, setShipForm] = useState({ company: "", trackingNo: "" });
   const [isClosing, setIsClosing] = useState(false);
   const [page, setPage] = useState(1);
@@ -32,7 +33,10 @@ export function MerchantModal({ modal, product, orderId, products, close, onNoti
 
   const selectedProduct = product ?? products[0];
   const queueProducts = products.filter((item) => ["竞拍中", "待开拍", "已成交"].includes(item.status));
-  const addableProducts = products.filter((item) => ["待上架", "待开拍"].includes(item.status));
+  const currentLiveProductIds = new Set(currentLive?.productIds ?? []);
+  const addableProducts = products
+    .filter((item) => ["待上架", "待开拍"].includes(item.status))
+    .filter((item) => !currentLiveProductIds.has(item.id));
   const modalProducts = modal === "addProduct" ? addableProducts : queueProducts;
   const pagedModalProducts = modalProducts.slice((page - 1) * modalPageSize, page * modalPageSize);
   const requestClose = () => {
@@ -167,7 +171,6 @@ export function MerchantModal({ modal, product, orderId, products, close, onNoti
                     <button
                       onClick={() => {
                         addProductToLive(item.id);
-                        onNotice("商品已加入直播商品队列");
                         requestClose();
                       }}
                     >

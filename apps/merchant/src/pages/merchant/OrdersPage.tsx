@@ -21,7 +21,7 @@ type OrdersPageProps = {
 export function OrdersPage({ orders, exportOrders, openModal }: OrdersPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const orderTabs = useMemo(() => ["全部订单", "待支付", "已支付", "已取消"], []);
+  const orderTabs = useMemo(() => ["全部订单", "待支付", "待发货", "已发货", "已完成", "已取消"], []);
   const stateTab = location.state && typeof location.state === "object" && "tab" in location.state ? String(location.state.tab) : "全部订单";
   const [tab, setTab] = useState(orderTabs.includes(stateTab) ? stateTab : "全部订单");
   const [keyword, setKeyword] = useState("");

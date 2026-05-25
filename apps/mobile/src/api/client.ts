@@ -48,6 +48,7 @@ export type MobileOrder = {
   product: MobileProduct;
   paidAmount: number;
   deadline?: string;
+  address?: Address;
   logistics?: {
     company: string;
     trackingNo: string;
@@ -142,8 +143,19 @@ export function payMobileOrder(id: string, token: string) {
   return request<{ order: MobileOrder; message: string }>(`/mobile/orders/${id}/pay`, { method: "POST" }, token);
 }
 
+export function updateMobileOrderAddress(orderId: string, addressId: string, token: string) {
+  return request<{ order: MobileOrder; message: string }>(`/mobile/orders/${orderId}/address`, {
+    method: "POST",
+    body: JSON.stringify({ addressId })
+  }, token);
+}
+
 export function completeMobileOrder(id: string, token: string) {
   return request<{ order: MobileOrder; message: string }>(`/mobile/orders/${id}/complete`, { method: "POST" }, token);
+}
+
+export function cancelMobileOrder(id: string, token: string) {
+  return request<{ order: MobileOrder; message: string }>(`/orders/${id}/cancel`, { method: "POST" }, token);
 }
 
 export function fetchBidHistory(token: string) {

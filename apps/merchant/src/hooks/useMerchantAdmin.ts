@@ -16,6 +16,7 @@ import {
   fetchHostOrders,
   fetchHostProducts,
   reviewProductById,
+  removeProductFromLiveSession,
   setCurrentLiveProduct,
   shipOrderById,
   startLiveById,
@@ -72,7 +73,8 @@ function liveStatus(status: BackendLiveSession["status"]): LiveSession["status"]
 function orderStatus(status: BackendOrder["status"]): OrderStatus {
   if (status === "PENDING_PAYMENT") return "待支付";
   if (status === "CANCELLED") return "已取消";
-  if (status === "PAID") return "已支付";
+  if (status === "PAID") return "待发货";
+  if (status === "SHIPPED") return "已发货";
   return "已完成";
 }
 
@@ -165,7 +167,10 @@ function toOrder(order: BackendOrder): Order {
     productTitle: order.product?.title ?? order.productId,
     productImage: order.product?.imageUrl ?? DEFAULT_PRODUCT_IMAGE,
     buyer: order.auction?.highestBidder?.nickname ?? order.buyerId,
-    phone: "--",
+    phone: order.address?.phone ?? "--",
+    addressName: order.address?.name,
+    addressPhone: order.address?.phone,
+    addressDetail: order.address?.detail,
     amount: order.amount,
     liveSession: order.auction?.liveSession?.title ?? order.auctionId,
     createdAt: formatDateTime(order.createdAt),
@@ -649,10 +654,44 @@ export function useMerchantAdmin() {
   function addProductToLive(productId: string, liveId?: string) {
     const live = liveSessions.find((item) => item.id === liveId) ?? currentLive;
     if (!live) return;
+    if (live.status === "已结束") {
+      notify("已结束直播不能添加拍品", "warning");
+      return;
+    }
     addProductToLiveSession(live.id, productId)
       .then(refreshData)
       .then(() => notify("商品已加入当前直播拍品队列"))
       .catch((error) => notify(error instanceof Error ? error.message : "添加拍品失败", "danger"));
+  }
+
+  function removeProductFromLive(productId: string, liveId?: string) {
+    const live = liveSessions.find((item) => item.id === liveId) ?? currentLive;
+    const product = products.find((item) => item.id === productId);
+    if (!live) return;
+    if (live.status === "已结束") {
+      notify("已结束直播不能移除拍品", "warning");
+      return;
+    }
+    if (live.activeAuctionProductId === productId) {
+      notify("正在拍卖的商品不能移除", "warning");
+      return;
+    }
+
+    requestConfirm({
+      title: "移除拍品",
+      message: `确认从「${live.title}」移除${product ? `「${product.title}」` : "该拍品"}吗？已产生的竞拍和订单记录会保留。`,
+      tone: "danger",
+      confirmText: "确认移除",
+      onConfirm: async () => {
+        try {
+          await removeProductFromLiveSession(live.id, productId);
+          await refreshData();
+          notify("拍品已从直播队列移除", "warning");
+        } catch (error) {
+          notify(error instanceof Error ? error.message : "移除拍品失败", "danger");
+        }
+      }
+    });
   }
 
   function shelfProduct() {
@@ -733,6 +772,7 @@ export function useMerchantAdmin() {
     closeOrder,
     shipOrder,
     addProductToLive,
+    removeProductFromLive,
     unshelfProduct,
     sendComment
   };

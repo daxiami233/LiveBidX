@@ -122,11 +122,11 @@ export default function App() {
         />
         <Route
           path="/live/new"
-          element={<LiveEditorPage products={merchant.products} liveSessions={merchant.liveSessions} saveLive={merchant.saveLive} addProductToLive={merchant.addProductToLive} onNotice={merchant.notify} />}
+          element={<LiveEditorPage products={merchant.products} liveSessions={merchant.liveSessions} saveLive={merchant.saveLive} addProductToLive={merchant.addProductToLive} removeProductFromLive={merchant.removeProductFromLive} onNotice={merchant.notify} />}
         />
         <Route
           path="/live/:id/edit"
-          element={<LiveEditorPage products={merchant.products} liveSessions={merchant.liveSessions} saveLive={merchant.saveLive} addProductToLive={merchant.addProductToLive} onNotice={merchant.notify} />}
+          element={<LiveEditorPage products={merchant.products} liveSessions={merchant.liveSessions} saveLive={merchant.saveLive} addProductToLive={merchant.addProductToLive} removeProductFromLive={merchant.removeProductFromLive} onNotice={merchant.notify} />}
         />
         <Route
           path="/live/:id/report"
@@ -137,6 +137,7 @@ export default function App() {
           element={
             <LiveConsolePage
               products={merchant.products}
+              liveSessions={merchant.liveSessions}
               activeLive={merchant.activeLive}
               currentLive={merchant.currentLive}
               activeAuctionProduct={merchant.activeAuctionProduct}
@@ -152,6 +153,7 @@ export default function App() {
               extendAuction={merchant.extendAuction}
               sendComment={merchant.sendComment}
               openModal={merchant.openModal}
+              removeProductFromLive={merchant.removeProductFromLive}
               onNotice={merchant.notify}
             />
           }
@@ -204,6 +206,7 @@ export default function App() {
         product={merchant.modalProduct}
         orderId={merchant.modalOrderId}
         products={merchant.products}
+        currentLive={merchant.currentLive}
         close={merchant.closeModal}
         onNotice={merchant.notify}
         addProductToLive={merchant.addProductToLive}

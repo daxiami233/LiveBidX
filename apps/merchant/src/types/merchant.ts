@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 
 export type ProductStatus = "竞拍中" | "讲解中" | "待开拍" | "已成交" | "流拍" | "已取消" | "已下架" | "待上架" | "待审核" | "即将开拍";
-export type OrderStatus = "待支付" | "已支付" | "已完成" | "已取消" | "已退款";
+export type OrderStatus = "待支付" | "待发货" | "已发货" | "已完成" | "已取消" | "已退款";
 export type PaymentStatus = "待支付" | "已支付" | "已退款";
 export type LiveStatus = "直播中" | "待开播" | "已结束";
 export type ModalName = "comment" | "queue" | "device" | "preview" | "logistics" | "ship" | "addProduct" | null;
@@ -71,6 +71,9 @@ export type Order = {
   productImage: string;
   buyer: string;
   phone: string;
+  addressName?: string;
+  addressPhone?: string;
+  addressDetail?: string;
   amount: number;
   liveSession: string;
   createdAt: string;

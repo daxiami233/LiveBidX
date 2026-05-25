@@ -93,6 +93,7 @@ export function DashboardPage({ products, orders, liveSessions, activeLive, user
   };
   const revenueAxis = ["成交额", money(rangeRevenue), "0"];
   const bidAxis = ["出价", rangeBidCount.toLocaleString(), "0"];
+  const hasRevenueTrend = rangeRevenue > 0;
   const topAuctionItems = products
     .filter((item) => item.status === "已成交" || item.bidCount > 0)
     .map((item) => ({
@@ -282,21 +283,25 @@ export function DashboardPage({ products, orders, liveSessions, activeLive, user
             <div className="panel-head">
               <h2>成交趋势</h2>
             </div>
-            <div className="chart-with-y-axis">
-              <div className="chart-y-axis">
-                {revenueAxis.map((label) => (
-                  <span key={`revenue-y-${label}`}>{label}</span>
-                ))}
-              </div>
-              <div className="chart-plot">
-                <div className="empty-block table-empty">暂无成交趋势时间序列数据</div>
-                <div className="chart-axis">
-                  {axisLabels.map((label) => (
-                    <span key={`revenue-${label}`}>{label}</span>
+            {hasRevenueTrend ? (
+              <div className="chart-with-y-axis">
+                <div className="chart-y-axis">
+                  {revenueAxis.map((label) => (
+                    <span key={`revenue-y-${label}`}>{label}</span>
                   ))}
                 </div>
+                <div className="chart-plot">
+                  <div className="empty-block table-empty">暂无成交趋势时间序列数据</div>
+                  <div className="chart-axis">
+                    {axisLabels.map((label) => (
+                      <span key={`revenue-${label}`}>{label}</span>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="chart-empty-none">无</div>
+            )}
           </section>
 
           <section className="panel analysis-chart-panel">

@@ -5,6 +5,7 @@ import { prisma } from "../config/prisma.js";
 import { getRedis } from "../config/redis.js";
 import { env } from "../config/env.js";
 import { verifyToken } from "../utils/token.js";
+import { calculateBidUpdate } from "../modules/auction/bidRules.js";
 import { advanceLiveAfterAuction, AuctionExpiredError, closeAuction } from "../modules/auction/auction.service.js";
 
 type SafeUser = {
@@ -25,6 +26,8 @@ type SocketData = {
 let io: Server | null = null;
 const viewerFallback = new Map<string, Set<string>>();
 const liveViewerFallback = new Map<string, Set<string>>();
+const liveHostFallback = new Map<string, string>();
+const eventRateLimits = new Map<string, number[]>();
 
 // 生成某场竞拍对应的 Socket.IO 房间名。
 function roomName(auctionId: string) {
@@ -47,6 +50,21 @@ function viewerMember(socketId: string) {
 // 判断 Redis 在线人数集合中的成员是否是普通用户。
 function isCustomerViewer(member: string) {
   return member.startsWith("CUSTOMER:");
+}
+
+export function assertRateLimit(key: string, limit: number, windowMs: number, message: string) {
+  const now = Date.now();
+  const recent = (eventRateLimits.get(key) ?? []).filter((time) => now - time < windowMs);
+  if (recent.length >= limit) {
+    eventRateLimits.set(key, recent);
+    throw new Error(message);
+  }
+  recent.push(now);
+  eventRateLimits.set(key, recent);
+}
+
+export function resetRateLimits() {
+  eventRateLimits.clear();
 }
 
 // 把 Prisma 竞拍结果整理成前端统一使用的 DTO。
@@ -169,7 +187,7 @@ async function getHostAuctions(hostId: string) {
 }
 
 // 为单场竞拍加 Redis 锁，避免并发出价导致状态错乱。
-async function acquireAuctionLock(auctionId: string) {
+export async function acquireAuctionLock(auctionId: string) {
   const redis = await getRedis();
   if (!redis) return { redis: null, lockId: null };
 
@@ -184,7 +202,7 @@ async function acquireAuctionLock(auctionId: string) {
 }
 
 // 释放当前请求持有的 Redis 出价锁。
-async function releaseAuctionLock(auctionId: string, lockId: string | null) {
+export async function releaseAuctionLock(auctionId: string, lockId: string | null) {
   if (!lockId) return;
 
   const redis = await getRedis();
@@ -262,6 +280,26 @@ async function addLiveViewer(liveSessionId: string, socketId: string) {
   return getLiveViewerCount(liveSessionId);
 }
 
+async function cacheLiveHost(liveSessionId: string, hostId: string) {
+  liveHostFallback.set(liveSessionId, hostId);
+  const redis = await getRedis();
+  if (!redis) return;
+  await redis.set(`live:${liveSessionId}:host`, hostId, "EX", 60 * 60 * 12);
+}
+
+async function getCachedLiveHost(liveSessionId: string) {
+  const redis = await getRedis();
+  if (redis) {
+    const hostId = await redis.get(`live:${liveSessionId}:host`);
+    if (hostId) return hostId;
+  }
+  const fallbackHostId = liveHostFallback.get(liveSessionId);
+  if (fallbackHostId) return fallbackHostId;
+  const live = await prisma.liveSession.findUnique({ where: { id: liveSessionId }, select: { hostId: true } });
+  if (live) await cacheLiveHost(liveSessionId, live.hostId);
+  return live?.hostId ?? null;
+}
+
 async function getLiveViewerCount(liveSessionId: string) {
   const redis = await getRedis();
 
@@ -291,6 +329,15 @@ async function removeLiveViewer(liveSessionId: string, socketId: string) {
   return getLiveViewerCount(liveSessionId);
 }
 
+async function clearLiveViewers(liveSessionId: string) {
+  const redis = await getRedis();
+  if (redis) {
+    await redis.del(`live:${liveSessionId}:viewers`);
+  }
+  liveViewerFallback.delete(liveSessionId);
+  liveHostFallback.delete(liveSessionId);
+}
+
 async function syncLiveViewerCount(liveSessionId: string, viewerCount: number) {
   await prisma.liveSession.update({
     where: { id: liveSessionId },
@@ -302,9 +349,9 @@ async function broadcastLiveViewerCount(liveSessionId: string, viewerCount: numb
   await syncLiveViewerCount(liveSessionId, viewerCount);
   io?.to(liveSessionRoom(liveSessionId)).emit("viewer_count_update", { liveSessionId, viewerCount });
   io?.to("lobby").emit("viewer_count_update", { liveSessionId, viewerCount });
-  const live = await prisma.liveSession.findUnique({ where: { id: liveSessionId }, select: { hostId: true } });
-  if (live) {
-    io?.to(hostLiveRoom(live.hostId)).emit("viewer_count_update", { liveSessionId, viewerCount });
+  const hostId = await getCachedLiveHost(liveSessionId);
+  if (hostId) {
+    io?.to(hostLiveRoom(hostId)).emit("viewer_count_update", { liveSessionId, viewerCount });
   }
 }
 
@@ -324,7 +371,9 @@ async function cacheAuctionState(auction: any) {
       currentPrice: auction.currentPrice,
       highestBidderId: auction.highestBidderId,
       endTime: auction.endTime,
-      minIncrement: auction.minIncrement
+      minIncrement: auction.minIncrement,
+      capPrice: auction.capPrice,
+      autoExtendSec: auction.autoExtendSec
     }),
     "EX",
     60 * 60 * 24
@@ -387,32 +436,38 @@ async function placeBid(auctionId: string, user: SafeUser, amount: number) {
         throw new AuctionExpiredError({ id: auction.id, liveSessionId: auction.liveSessionId, productId: auction.productId });
       }
 
-      const roundedAmount = Math.round(amount);
-      const minAmount = auction.currentPrice + auction.minIncrement;
-
-      if (roundedAmount < minAmount) {
-        throw new Error(`出价需不低于 ${minAmount}`);
-      }
-
-      const shouldExtend = auction.endTime && auction.endTime.getTime() - Date.now() <= 10000;
-      const nextEndTime = shouldExtend ? new Date(auction.endTime!.getTime() + 15000) : auction.endTime;
+      const bidUpdate = calculateBidUpdate({
+        amount,
+        currentPrice: auction.currentPrice,
+        minIncrement: auction.minIncrement,
+        capPrice: auction.capPrice,
+        endTime: auction.endTime,
+        autoExtendSec: auction.autoExtendSec
+      });
 
       const bid = await tx.bid.create({
         data: {
           auctionId: auction.id,
           userId: user.id,
-          amount: roundedAmount
+          amount: bidUpdate.amount
         },
         include: { user: { select: { id: true, nickname: true } } }
       });
 
-      const updatedAuction = await tx.auction.update({
-        where: { id: auction.id },
+      const updated = await tx.auction.updateMany({
+        where: { id: auction.id, status: "RUNNING" },
         data: {
-          currentPrice: roundedAmount,
+          currentPrice: bidUpdate.amount,
           highestBidderId: user.id,
-          endTime: nextEndTime
-        },
+          endTime: bidUpdate.nextEndTime
+        }
+      });
+      if (updated.count === 0) {
+        throw new Error("竞拍已结束");
+      }
+
+      const updatedAuction = await tx.auction.findUnique({
+        where: { id: auction.id },
         include: {
           product: true,
           host: { select: { id: true, nickname: true } },
@@ -425,14 +480,24 @@ async function placeBid(auctionId: string, user: SafeUser, amount: number) {
           _count: { select: { bids: true } }
         }
       });
+      if (!updatedAuction) throw new Error("竞拍不存在");
 
       return { auction: toAuctionDto(updatedAuction), bid };
     });
 
     await cacheAuctionState(result.auction);
-    await cacheBid(auctionId, user.id, user.nickname, Math.round(amount), result.bid);
+    await cacheBid(auctionId, user.id, user.nickname, result.bid.amount, result.bid);
 
-    return result.auction;
+    if (result.auction.capPrice && result.auction.currentPrice >= result.auction.capPrice) {
+      await closeAuction(result.auction.id, new Date());
+      if (result.auction.liveSessionId) {
+        await advanceLiveAfterAuction(result.auction.liveSessionId, result.auction.productId);
+        await emitLiveSessionState(result.auction.liveSessionId);
+      }
+      return { auction: await getAuctionDetail(result.auction.id), ended: true };
+    }
+
+    return { auction: result.auction, ended: false };
   } catch (error) {
     if (error instanceof AuctionExpiredError) {
       await closeAuction(error.auction.id);
@@ -470,6 +535,17 @@ export async function emitLiveSessionState(liveSessionId: string) {
   if (!live) return;
   io.to(liveSessionRoom(liveSessionId)).emit("live_session_state", { live });
   io.to(hostLiveRoom(live.hostId)).emit("live_session_state", { live });
+}
+
+export async function emitLiveEnded(liveSessionId: string) {
+  if (!io) return;
+  const live = await getLiveSessionDetail(liveSessionId);
+  await clearLiveViewers(liveSessionId);
+  await broadcastLiveViewerCount(liveSessionId, 0);
+  io.to(liveSessionRoom(liveSessionId)).emit("live_ended", { liveSessionId, live });
+  if (live) {
+    io.to(hostLiveRoom(live.hostId)).emit("live_ended", { liveSessionId, live });
+  }
 }
 
 // 向指定竞拍房间广播最新竞拍状态。
@@ -574,13 +650,15 @@ export async function initializeRealtime(server: HttpServer) {
         const live = await getLiveSessionDetail(liveSessionId);
         if (!live) throw new Error("直播场次不存在");
         if (data.user.role === "HOST" && live.hostId !== data.user.id) throw new Error("无权进入该直播控制台");
+        await cacheLiveHost(liveSessionId, live.hostId);
 
         socket.join(liveSessionRoom(liveSessionId));
         data.liveSessions.add(liveSessionId);
-        const shouldCountViewer = data.user.role === "CUSTOMER" && !data.viewerLiveSessions.has(liveSessionId);
+        const shouldCountViewer = data.user.role === "CUSTOMER" && live.status === "LIVE" && !data.viewerLiveSessions.has(liveSessionId);
         const viewerCount = shouldCountViewer ? await addLiveViewer(liveSessionId, socket.id) : await getLiveViewerCount(liveSessionId);
         if (shouldCountViewer) data.viewerLiveSessions.add(liveSessionId);
         socket.emit("live_session_state", { live });
+        if (live.status === "ENDED") socket.emit("live_ended", { liveSessionId, live });
         socket.emit("chat_history", { liveSessionId, messages: await getRecentLiveComments(liveSessionId) });
         await broadcastLiveViewerCount(liveSessionId, viewerCount);
         callback?.({ ok: true });
@@ -643,11 +721,16 @@ export async function initializeRealtime(server: HttpServer) {
       try {
         const auctionId = String(payload?.auctionId ?? "");
         const amount = Number(payload?.amount);
-        const auction = await placeBid(auctionId, data.user, amount);
+        assertRateLimit(`bid:${socket.id}`, 8, 10_000, "出价太频繁，请稍后再试");
+        const result = await placeBid(auctionId, data.user, amount);
 
-        io?.to(roomName(auctionId)).emit("bid_update", { auction });
-        await emitLiveAuctions();
-        callback?.({ ok: true, auction });
+        if (result.ended) {
+          await emitAuctionEnded(auctionId);
+        } else {
+          io?.to(roomName(auctionId)).emit("bid_update", { auction: result.auction });
+          await emitLiveAuctions();
+        }
+        callback?.({ ok: true, auction: result.auction });
       } catch (error) {
         callback?.({ ok: false, message: error instanceof Error ? error.message : "出价失败" });
       }
@@ -658,6 +741,7 @@ export async function initializeRealtime(server: HttpServer) {
         const auctionId = String(payload?.auctionId ?? "");
         const payloadLiveSessionId = String(payload?.liveSessionId ?? "");
         const content = String(payload?.content ?? "").trim();
+        assertRateLimit(`chat:${socket.id}`, 6, 10_000, "发送太频繁，请稍后再试");
         let liveSessionId = payloadLiveSessionId;
 
         if (!liveSessionId && auctionId) {
@@ -667,6 +751,8 @@ export async function initializeRealtime(server: HttpServer) {
         if (!liveSessionId) throw new Error("缺少直播间 ID");
         if (!content) throw new Error("请输入弹幕内容");
         if (content.length > 80) throw new Error("弹幕最多 80 个字");
+        const live = await prisma.liveSession.findUnique({ where: { id: liveSessionId }, select: { status: true } });
+        if (!live || live.status !== "LIVE") throw new Error("直播已结束，无法发送评论");
 
         const comment = await prisma.liveComment.create({
           data: { liveSessionId, userId: data.user.id, content },
@@ -691,13 +777,20 @@ export async function initializeRealtime(server: HttpServer) {
     });
 
     socket.on("disconnect", async () => {
-      for (const liveSessionId of data.viewerLiveSessions) {
-        const viewerCount = await removeLiveViewer(liveSessionId, socket.id);
-        await broadcastLiveViewerCount(liveSessionId, viewerCount);
-      }
-      for (const auctionId of data.viewerAuctions) {
-        const viewerCount = await removeViewer(auctionId, socket.id);
-        io?.to(roomName(auctionId)).emit("viewer_count_update", { auctionId, viewerCount });
+      try {
+        for (const liveSessionId of data.viewerLiveSessions) {
+          const viewerCount = await removeLiveViewer(liveSessionId, socket.id);
+          await broadcastLiveViewerCount(liveSessionId, viewerCount);
+        }
+        for (const auctionId of data.viewerAuctions) {
+          const viewerCount = await removeViewer(auctionId, socket.id);
+          io?.to(roomName(auctionId)).emit("viewer_count_update", { auctionId, viewerCount });
+        }
+      } catch (error) {
+        console.error("Socket disconnect cleanup failed", error);
+      } finally {
+        eventRateLimits.delete(`bid:${socket.id}`);
+        eventRateLimits.delete(`chat:${socket.id}`);
       }
     });
   });

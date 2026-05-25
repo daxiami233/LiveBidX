@@ -35,7 +35,7 @@ router.post("/register", asyncHandler(async (req, res) => {
     role?: "CUSTOMER" | "HOST";
   };
 
-  const nextRole = role ?? "HOST";
+  const nextRole = role ?? "CUSTOMER";
 
   if (!nickname?.trim() || !email?.trim() || !password || !["CUSTOMER", "HOST"].includes(nextRole)) {
     res.status(400).json({ message: "请填写完整注册信息" });

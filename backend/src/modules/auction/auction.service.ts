@@ -15,32 +15,38 @@ export class AuctionExpiredError extends Error {
   }
 }
 
-export async function closeAuction(auctionId: string) {
-  const auction = await prisma.auction.findUnique({
-    where: { id: auctionId },
-    include: { order: true }
-  });
-
-  if (!auction || auction.status === "ENDED") return auction;
-
+export async function closeAuction(auctionId: string, overrideEndTime?: Date) {
   return prisma.$transaction(async (tx) => {
-    const ended = await tx.auction.update({
-      where: { id: auction.id },
-      data: { status: "ENDED" }
+    const result = await tx.auction.updateMany({
+      where: { id: auctionId, status: { in: ["PENDING", "RUNNING"] } },
+      data: {
+        status: "ENDED",
+        ...(overrideEndTime ? { endTime: overrideEndTime } : {})
+      }
     });
 
-    if (auction.highestBidderId && !auction.order) {
+    const fresh = await tx.auction.findUnique({
+      where: { id: auctionId },
+      include: { order: true }
+    });
+
+    if (result.count === 0 || !fresh) return fresh;
+
+    if (fresh.highestBidderId && !fresh.order) {
       await tx.order.create({
         data: {
-          auctionId: auction.id,
-          productId: auction.productId,
-          buyerId: auction.highestBidderId,
-          amount: auction.currentPrice
+          auctionId: fresh.id,
+          productId: fresh.productId,
+          buyerId: fresh.highestBidderId,
+          amount: fresh.currentPrice
         }
       });
     }
 
-    return ended;
+    return tx.auction.findUnique({
+      where: { id: auctionId },
+      include: { order: true }
+    });
   });
 }
 

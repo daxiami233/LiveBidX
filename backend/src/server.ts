@@ -10,9 +10,10 @@ import liveRoutes from "./modules/live/live.routes.js";
 import mobileRoutes from "./modules/mobile/mobile.routes.js";
 import orderRoutes from "./modules/order/order.routes.js";
 import productRoutes from "./modules/product/product.routes.js";
-import { initializeRealtime } from "./realtime/auctionGateway.js";
+import { advanceLiveAfterAuction, closeAuction } from "./modules/auction/auction.service.js";
+import { emitAuctionEnded, emitLiveSessionState, initializeRealtime } from "./realtime/auctionGateway.js";
 
-const app = express();
+export const app = express();
 const allowedOrigins = new Set([
   env.merchantOrigin,
   env.mobileOrigin,
@@ -63,19 +64,61 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   res.status(500).json({ message: "服务器内部错误" });
 });
 
-const server = createServer(app);
-await initializeRealtime(server);
+export const server = createServer(app);
 
-server.listen(env.port, () => {
-  console.log(`LiveBidX API running on http://localhost:${env.port}`);
-});
+let closingExpiredAuctions = false;
+let expiredAuctionTimer: NodeJS.Timeout | null = null;
+
+export async function runExpiredAuctionSweep() {
+  if (closingExpiredAuctions) return;
+  closingExpiredAuctions = true;
+  try {
+    const expired = await prisma.auction.findMany({
+      where: { status: "RUNNING", endTime: { lte: new Date() } },
+      select: { id: true, liveSessionId: true, productId: true }
+    });
+
+    for (const auction of expired) {
+      await closeAuction(auction.id);
+      if (auction.liveSessionId) {
+        await advanceLiveAfterAuction(auction.liveSessionId, auction.productId);
+        await emitLiveSessionState(auction.liveSessionId);
+      }
+      await emitAuctionEnded(auction.id);
+    }
+  } catch (error) {
+    console.error("Expired auction scheduler failed", error);
+  } finally {
+    closingExpiredAuctions = false;
+  }
+}
+
+export function startExpiredAuctionScheduler(intervalMs = 10_000) {
+  if (expiredAuctionTimer) return expiredAuctionTimer;
+  expiredAuctionTimer = setInterval(runExpiredAuctionSweep, intervalMs);
+  return expiredAuctionTimer;
+}
+
+if (process.env.NODE_ENV !== "test") {
+  await initializeRealtime(server);
+  startExpiredAuctionScheduler();
+  server.listen(env.port, () => {
+    console.log(`LiveBidX API running on http://localhost:${env.port}`);
+  });
+}
 
 // 优雅关闭数据库、Redis 和 HTTP 服务。
-async function shutdown() {
+export async function shutdown() {
+  if (expiredAuctionTimer) {
+    clearInterval(expiredAuctionTimer);
+    expiredAuctionTimer = null;
+  }
   await prisma.$disconnect();
   await disconnectRedis();
   server.close(() => process.exit(0));
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+if (process.env.NODE_ENV !== "test") {
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}

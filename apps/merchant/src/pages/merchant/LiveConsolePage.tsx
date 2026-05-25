@@ -1,13 +1,16 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Clock3,
   MessageCircle,
   MonitorPlay,
   PackageOpen,
+  Plus,
   Play,
   Send,
   Smile,
+  Trash2,
   Trophy,
   UsersRound,
   Wifi
@@ -22,6 +25,7 @@ const consoleQueuePageSize = 5;
 
 type LiveConsolePageProps = {
   products: Product[];
+  liveSessions: LiveSession[];
   activeLive: LiveSession | null;
   currentLive: LiveSession | null;
   activeAuctionProduct: Product | null;
@@ -37,11 +41,13 @@ type LiveConsolePageProps = {
   extendAuction: (id: string, seconds: number) => void;
   sendComment: (text: string) => boolean;
   openModal: (modal: ModalName, product?: Product) => void;
+  removeProductFromLive: (productId: string, liveId?: string) => void;
   onNotice: (text: string, tone?: Notice["tone"]) => void;
 };
 
 export function LiveConsolePage({
   products,
+  liveSessions,
   activeLive,
   currentLive,
   activeAuctionProduct,
@@ -57,12 +63,17 @@ export function LiveConsolePage({
   extendAuction,
   sendComment,
   openModal,
+  removeProductFromLive,
   onNotice
 }: LiveConsolePageProps) {
+  const navigate = useNavigate();
   const [extendValue, setExtendValue] = useState("30");
   const [commentText, setCommentText] = useState("");
   const [queuePage, setQueuePage] = useState(1);
   const live = activeLive ?? currentLive;
+  const scheduledLives = useMemo(() => {
+    return liveSessions.filter((item) => item.status === "待开播");
+  }, [liveSessions]);
   const liveProducts = useMemo(() => {
     const ids = live?.productIds ?? [];
     return ids.map((id) => products.find((item) => item.id === id)).filter(Boolean) as Product[];
@@ -95,19 +106,105 @@ export function LiveConsolePage({
   const leaders = [...bids].sort((a, b) => b.amount - a.amount).slice(0, 3);
   const visibleComments = isRunning ? comments.slice(0, 5) : [];
 
+  if (!isRunning) {
+    if (scheduledLives.length) {
+      return (
+        <div className="console-page empty">
+          <section className="panel console-scheduled-panel">
+            <div className="panel-head">
+              <h2>待开播直播</h2>
+              <button onClick={() => navigate("/live/new")}>创建直播</button>
+            </div>
+            <div className="table-scroll console-scheduled-scroll">
+              <table className="live-list-table">
+                <thead>
+                  <tr>
+                    <th>直播标题</th>
+                    <th>计划开播时间</th>
+                    <th>关联拍品数</th>
+                    <th>拍品准备</th>
+                    <th>直播配置</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scheduledLives.map((item) => {
+                    const liveProduct = products.find((product) => item.currentProductId === product.id)
+                      ?? products.find((product) => item.productIds.includes(product.id));
+                    return (
+                      <tr key={item.id}>
+                        <td>
+                          <strong className="live-title-text">{item.title}</strong>
+                          <small>直播间ID：{item.roomId}</small>
+                        </td>
+                        <td>{item.scheduledAt}</td>
+                        <td>{item.productIds.length}</td>
+                        <td>
+                          <div className="live-product-cell">
+                            {item.productIds.length ? (
+                              <>
+                                <div className="live-product-stack">
+                                  {products
+                                    .filter((product) => item.productIds.includes(product.id))
+                                    .slice(0, 3)
+                                    .map((product) => (
+                                      <img key={product.id} src={product.image} alt={product.title} />
+                                    ))}
+                                </div>
+                                <p className="live-product-summary">
+                                  <strong>{item.productIds.length} 件拍品已配置</strong>
+                                  <b>首拍：{liveProduct?.title ?? "暂无可展示拍品"}</b>
+                                </p>
+                              </>
+                            ) : (
+                              <>
+                                <span className="live-product-placeholder">
+                                  <PackageOpen size={18} />
+                                </span>
+                                <p className="live-product-summary">
+                                  <strong>暂无拍品</strong>
+                                  <b>请进入编辑页添加</b>
+                                </p>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="live-config-tags">
+                            <span>{item.streamStatus}</span>
+                            <span>{item.networkStatus}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="live-row-actions">
+                            <Button onClick={() => startLive(item.id)}>开始直播</Button>
+                            <Button onClick={() => navigate(`/live/${item.id}/edit?from=scheduled`)}>编辑</Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    return (
+      <div className="console-page empty">
+        <section className="console-create-live-empty">
+          <Button tone="primary" onClick={() => navigate("/live/new")}>
+            <Plus size={18} /> 创建直播
+          </Button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className={isRunning ? "console-page live" : "console-page empty"}>
-      {!isRunning && (
-        <section className="console-status-banner">
-          <span>i</span>
-          <div>
-            <h2>当前无进行中的直播</h2>
-            <p>开始直播后，将在本页面内进行拍卖控制</p>
-          </div>
-          <MonitorPlay size={54} />
-        </section>
-      )}
-
       <div className="console-layout">
         <section className="panel console-phone-panel">
           <div className="console-live-meta" aria-label="直播画面状态">
@@ -182,19 +279,41 @@ export function LiveConsolePage({
               <div className="auction-queue">
                 {pagedQueueProducts.map((product, index) => {
                   const disabledReason = isAuctionRunning ? "竞拍中不可切换" : product.status === "已成交" || product.status === "流拍" || product.status === "已取消" ? "已结束不可选择" : "";
+                  const isActiveAuctionProduct = activeLive?.activeAuctionProductId === product.id;
+                  const removeDisabledReason = isActiveAuctionProduct ? "正在拍卖的商品不能移除" : "";
                   return (
-                    <button
+                    <div
                       key={product.id}
-                      className={activeLive?.currentProductId === product.id || activeLive?.activeAuctionProductId === product.id ? "active" : ""}
-                      disabled={Boolean(disabledReason)}
-                      title={disabledReason || "设为当前拍品"}
-                      onClick={() => selectProductForLive(product.id)}
+                      className={`auction-queue-card ${activeLive?.currentProductId === product.id || isActiveAuctionProduct ? "active" : ""}`}
                     >
-                      <span>{(queuePage - 1) * consoleQueuePageSize + index + 1}</span>
-                      <img src={product.image} alt={product.title} />
-                      <strong>{product.title}</strong>
-                      <em>{disabledReason || (product.status === "竞拍中" ? "正在拍卖" : product.status)}</em>
-                    </button>
+                      <button
+                        className="auction-queue-select"
+                        disabled={Boolean(disabledReason)}
+                        title={disabledReason || "设为当前拍品"}
+                        onClick={() => selectProductForLive(product.id)}
+                      >
+                        <span>{(queuePage - 1) * consoleQueuePageSize + index + 1}</span>
+                        <img src={product.image} alt={product.title} />
+                        <strong>{product.title}</strong>
+                        <em>{disabledReason || (product.status === "竞拍中" ? "正在拍卖" : product.status)}</em>
+                      </button>
+                      <button
+                        className="queue-remove-button"
+                        disabled={Boolean(removeDisabledReason)}
+                        title={removeDisabledReason || "从队列移除"}
+                        onClick={() => {
+                          if (!activeLive) return;
+                          if (removeDisabledReason) {
+                            onNotice(removeDisabledReason, "warning");
+                            return;
+                          }
+                          removeProductFromLive(product.id, activeLive.id);
+                        }}
+                      >
+                        <Trash2 size={16} />
+                        移除
+                      </button>
+                    </div>
                   );
                 })}
               </div>

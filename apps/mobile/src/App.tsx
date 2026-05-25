@@ -26,6 +26,7 @@ import {
   X
 } from "lucide-react";
 import {
+  cancelMobileOrder,
   completeMobileOrder,
   createAddress,
   fetchAddresses,
@@ -40,6 +41,7 @@ import {
   register,
   setDefaultAddress as setDefaultAddressApi,
   updateAddress,
+  updateMobileOrderAddress,
   type Address,
   type AuthResponse,
   type AuthUser,
@@ -63,7 +65,7 @@ type RealtimeAuction = {
   minIncrement: number;
   capPrice?: number | null;
   endTime?: string | null;
-  status: "PENDING" | "RUNNING" | "ENDED";
+  status: "PENDING" | "RUNNING" | "ENDED" | "CANCELLED";
   highestBidderId?: string | null;
   highestBidder?: { id: string; nickname: string } | null;
   product?: {
@@ -81,6 +83,8 @@ type RealtimeAuction = {
   order?: { id: string } | null;
 };
 type LiveAuctionPayload = { auction: RealtimeAuction };
+type LiveSessionStatePayload = { live?: { id: string; status: "SCHEDULED" | "LIVE" | "ENDED" } };
+type LiveEndedPayload = { liveSessionId: string };
 type ChatPayload = { message: { id: string; nickname: string; content: string } };
 type ChatHistoryPayload = { messages: Array<{ id: string; nickname: string; content: string }> };
 type ViewerCountPayload = { auctionId?: string; liveSessionId?: string; viewerCount: number };
@@ -440,8 +444,10 @@ function LiveRoomPage() {
   const [comments, setComments] = useState<LiveComment[]>([]);
   const [auctionId, setAuctionId] = useState<string | null>(null);
   const [roomTip, setRoomTip] = useState<string | null>(null);
+  const [liveEnded, setLiveEnded] = useState(false);
   const commentsRef = useRef<HTMLDivElement | null>(null);
   const scrollIdleTimer = useRef<number | null>(null);
+  const liveEndedTimer = useRef<number | null>(null);
   const socketRef = useRef<SocketInstance | null>(null);
   const auctionIdRef = useRef<string | null>(null);
   const product = room?.currentProduct;
@@ -468,12 +474,35 @@ function LiveRoomPage() {
     window.setTimeout(() => setRoomTip(null), delay);
   };
 
+  const exitLiveRoom = () => {
+    if (liveEndedTimer.current) {
+      window.clearTimeout(liveEndedTimer.current);
+      liveEndedTimer.current = null;
+    }
+    if (liveId) socketRef.current?.emit("leave_live_session", { liveSessionId: liveId });
+    if (auctionIdRef.current) socketRef.current?.emit("leave_auction", { auctionId: auctionIdRef.current });
+    navigate(source, { replace: true });
+  };
+
+  const showLiveEndedDialog = () => {
+    setPanel(null);
+    setRoomTip(null);
+    setLiveEnded(true);
+    if (liveEndedTimer.current) window.clearTimeout(liveEndedTimer.current);
+    liveEndedTimer.current = window.setTimeout(exitLiveRoom, 2600);
+  };
+
   useEffect(() => {
     auctionIdRef.current = auctionId;
   }, [auctionId]);
 
   useEffect(() => {
     if (!liveId) return;
+    setLiveEnded(false);
+    if (liveEndedTimer.current) {
+      window.clearTimeout(liveEndedTimer.current);
+      liveEndedTimer.current = null;
+    }
     fetchMobileLiveRoom(liveId, getMobileToken())
       .then(({ room, queue, ranking, auction }) => {
         setRoom(room);
@@ -508,7 +537,16 @@ function LiveRoomPage() {
       socket.emit("join_live_session", { liveSessionId: liveId }, () => undefined);
       if (auctionIdRef.current) socket.emit("join_auction", { auctionId: auctionIdRef.current }, () => undefined);
     });
-    socket.on("live_session_state", refreshRoom);
+    socket.on("live_session_state", ({ live }: LiveSessionStatePayload) => {
+      if (live?.status === "ENDED") {
+        showLiveEndedDialog();
+        return;
+      }
+      refreshRoom();
+    });
+    socket.on("live_ended", ({ liveSessionId: endedLiveId }: LiveEndedPayload) => {
+      if (endedLiveId === liveId) showLiveEndedDialog();
+    });
     socket.on("auction_state", ({ auction }: LiveAuctionPayload) => {
       setAuctionId(auction.id);
       setRoom((current) => current ? mergeAuctionIntoRoom(current, auction) : current);
@@ -549,6 +587,10 @@ function LiveRoomPage() {
       if (auctionIdRef.current) socket.emit("leave_auction", { auctionId: auctionIdRef.current });
       socket.disconnect();
       socketRef.current = null;
+      if (liveEndedTimer.current) {
+        window.clearTimeout(liveEndedTimer.current);
+        liveEndedTimer.current = null;
+      }
     };
   }, [liveId]);
 
@@ -727,8 +769,12 @@ function LiveRoomPage() {
       </nav>
 
         <footer className="comment-bar">
-        <input value={commentText} onChange={(event) => setCommentText(event.target.value)} placeholder={commentSent ? "已发送到直播间" : "说点什么..."} />
+        <input value={commentText} disabled={liveEnded} onChange={(event) => setCommentText(event.target.value)} placeholder={liveEnded ? "直播已结束" : commentSent ? "已发送到直播间" : "说点什么..."} />
         <button type="button" onClick={() => {
+          if (liveEnded) {
+            showRoomTip("直播已结束");
+            return;
+          }
           const content = commentText.trim();
           if (!content) {
             showRoomTip("请输入评论内容");
@@ -771,7 +817,21 @@ function LiveRoomPage() {
           />
         ) : null
       )}
+      {liveEnded && <LiveEndedDialog onExit={exitLiveRoom} />}
     </main>
+  );
+}
+
+function LiveEndedDialog({ onExit }: { onExit: () => void }) {
+  return (
+    <div className="modal-layer">
+      <section className="result-dialog live-ended-dialog">
+        <Radio size={34} />
+        <h2>直播已结束</h2>
+        <p>本场直播已经结束，将自动返回直播大厅。</p>
+        <button className="primary-cta" type="button" onClick={onExit}>立即返回</button>
+      </section>
+    </div>
   );
 }
 
@@ -1118,7 +1178,7 @@ function OrderDetailPage() {
   }
   const canEditAddress = status === "待支付" || status === "待发货";
   const isShipped = status === "已发货";
-  const address = addresses.find((item) => item.isDefault) ?? addresses[0] ?? null;
+  const address = order.address ?? addresses.find((item) => item.isDefault) ?? addresses[0] ?? null;
   const bidInfo = bidItems.find((item) => item.product.id === order.product.id);
 
   return (
@@ -1147,7 +1207,7 @@ function OrderDetailPage() {
         <div className="order-address-head">
           <p className="address-line">{address ? `${address.name} ｜ ${address.phone}` : "请选择收货地址"}</p>
           {canEditAddress && (
-            <Link to="/mobile/addresses" state={{ from: routeSource(location), mode: "selectAddress" }}>
+            <Link to="/mobile/addresses" state={{ from: routeSource(location), mode: "selectAddress", orderId: order.id }}>
               修改地址
             </Link>
           )}
@@ -1195,24 +1255,32 @@ function OrderDetailPage() {
           <span>{status === "已发货" ? "物流状态" : "应付金额"}</span>
           <strong>{money(order.paidAmount)}</strong>
         </div>
-        {status === "待支付" && <button type="button" onClick={() => {
-          payMobileOrder(order.id, getMobileToken()).then(({ order }) => {
-            setOrder(order);
-            setStatus(order.status);
-          });
-        }}>立即支付</button>}
-        {status === "待发货" && (
-          <Link className="pay-link" to="/mobile/addresses" state={{ from: routeSource(location), mode: "selectAddress" }}>
-            修改地址
-          </Link>
-        )}
-        {status === "已发货" && <button type="button" onClick={() => {
-          completeMobileOrder(order.id, getMobileToken()).then(({ order }) => {
-            setOrder(order);
-            setStatus(order.status);
-          });
-        }}>确认收货</button>}
-        {status === "已完成" && <button type="button">已完成</button>}
+        <div className="pay-footer-actions">
+          {status === "待支付" && <button type="button" onClick={() => {
+            payMobileOrder(order.id, getMobileToken()).then(({ order }) => {
+              setOrder(order);
+              setStatus(order.status);
+            }).catch((error) => window.alert(error instanceof Error ? error.message : "支付失败"));
+          }}>立即支付</button>}
+          {status === "待支付" && <button type="button" className="ghost-action" onClick={() => {
+            cancelMobileOrder(order.id, getMobileToken()).then(({ order }) => {
+              setOrder(order);
+              setStatus(order.status);
+            }).catch((error) => window.alert(error instanceof Error ? error.message : "取消失败"));
+          }}>取消订单</button>}
+          {status === "待发货" && (
+            <Link className="pay-link" to="/mobile/addresses" state={{ from: routeSource(location), mode: "selectAddress", orderId: order.id }}>
+              修改地址
+            </Link>
+          )}
+          {status === "已发货" && <button type="button" onClick={() => {
+            completeMobileOrder(order.id, getMobileToken()).then(({ order }) => {
+              setOrder(order);
+              setStatus(order.status);
+            });
+          }}>确认收货</button>}
+          {status === "已完成" && <button type="button">已完成</button>}
+        </div>
       </footer>
     </main>
   );
@@ -1278,8 +1346,10 @@ function BidHistoryPage() {
 function AddressesPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const source = (location.state as RouteState | null)?.from;
-  const selectingForOrder = (location.state as (RouteState & { mode?: string }) | null)?.mode === "selectAddress";
+  const routeState = location.state as (RouteState & { mode?: string; orderId?: string }) | null;
+  const source = routeState?.from;
+  const selectingForOrder = routeState?.mode === "selectAddress";
+  const orderId = routeState?.orderId;
   const emptyAddress: Address = { id: "", name: "", phone: "", detail: "", isDefault: false };
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [editingAddress, setEditingAddress] = useState<Address | null>(null);
@@ -1306,35 +1376,47 @@ function AddressesPage() {
   };
 
   const chooseAddress = (addressId: string) => {
-    setDefaultAddressRequest(addressId);
-    if (source) {
-      window.setTimeout(() => navigate(source), 180);
-    }
+    const afterChoose = () => {
+      if (source) window.setTimeout(() => navigate(source), 180);
+    };
+    setDefaultAddressApi(addressId, getMobileToken())
+      .then(({ addresses }) => {
+        setAddresses(addresses);
+        return orderId ? updateMobileOrderAddress(orderId, addressId, getMobileToken()) : null;
+      })
+      .then(() => {
+        showAddressNotice("收货地址已选择");
+        afterChoose();
+      })
+      .catch((error) => showAddressNotice(error instanceof Error ? error.message : "选择失败"));
   };
 
   const saveAddress = () => {
     if (!editingAddress) return;
     const payload = { name: editingAddress.name, phone: editingAddress.phone, detail: editingAddress.detail };
-    const afterSave = (message: string) => {
+    const afterSave = (message: string, addressId?: string) => {
       setEditingAddress(null);
-      showAddressNotice(message);
-      if (source) {
-        window.setTimeout(() => navigate(source), 180);
-      }
+      const assignOrder = orderId && addressId ? updateMobileOrderAddress(orderId, addressId, getMobileToken()) : Promise.resolve();
+      assignOrder
+        .then(() => {
+          showAddressNotice(message);
+          if (source) window.setTimeout(() => navigate(source), 180);
+        })
+        .catch((error) => showAddressNotice(error instanceof Error ? error.message : "保存失败"));
     };
 
     if (editingAddress.id) {
       updateAddress(editingAddress.id, payload, getMobileToken())
         .then(({ address }) => {
           setAddresses((current) => current.map((item) => item.id === address.id ? address : item));
-          afterSave("地址已更新");
+          afterSave("地址已更新", address.id);
         })
         .catch((error) => showAddressNotice(error instanceof Error ? error.message : "保存失败"));
     } else {
       createAddress(payload, getMobileToken())
         .then(({ address }) => {
           setAddresses((current) => [address, ...current]);
-          afterSave("地址已新增");
+          afterSave("地址已新增", address.id);
         })
         .catch((error) => showAddressNotice(error instanceof Error ? error.message : "保存失败"));
     }

@@ -12,6 +12,8 @@
     "dev:backend": "npm run dev -w backend",
     "dev:merchant": "npm run dev -w apps/merchant",
     "dev:mobile": "npm run dev -w apps/mobile",
+    "test:backend": "npm run test -w backend",
+    "test:backend:coverage": "npm run test:coverage -w backend",
     "build:backend": "npm run build -w backend",
     "build:merchant": "npm run build -w apps/merchant",
     "build:mobile": "npm run build -w apps/mobile",

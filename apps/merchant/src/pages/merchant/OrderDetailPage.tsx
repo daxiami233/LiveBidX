@@ -86,9 +86,9 @@ export function OrderDetailPage({ orders, closeOrder, exportOrders, openModal }:
         <section className="panel info-list">
           <h2>买家信息</h2>
           <p>买家昵称：{order.buyer}</p>
-          <p>手机号：{order.phone === "--" ? "暂无手机号" : order.phone}</p>
-          <p>收货人：暂无收货信息</p>
-          <p>收货地址：暂无收货地址</p>
+          <p>手机号：{order.addressPhone ?? (order.phone === "--" ? "暂无手机号" : order.phone)}</p>
+          <p>收货人：{order.addressName ?? "暂无收货信息"}</p>
+          <p>收货地址：{order.addressDetail ?? "暂无收货地址"}</p>
         </section>
         <section className="panel info-list">
           <h2>金额信息</h2>

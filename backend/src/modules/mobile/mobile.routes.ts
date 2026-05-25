@@ -3,6 +3,7 @@ import { prisma } from "../../config/prisma.js";
 import { requireAuth } from "../../middleware/auth.js";
 import { requireRole } from "../../middleware/role.js";
 import { asyncHandler } from "../../utils/http.js";
+import { assignCustomerOrderAddress, OrderServiceError, payCustomerOrder } from "../order/order.service.js";
 
 const router = Router();
 
@@ -19,6 +20,7 @@ const productSelect = {
 };
 
 const orderInclude = {
+  address: true,
   product: { select: productSelect },
   auction: {
     include: {
@@ -54,6 +56,7 @@ function statusToOrderLabel(status: string) {
 
 function statusToBidLabel(status: string, won: boolean, hasBid: boolean) {
   if (status === "RUNNING") return "竞拍中";
+  if (status === "CANCELLED") return "已取消";
   if (won) return "已拍中";
   if (hasBid) return "未拍中";
   return "已取消";
@@ -91,6 +94,13 @@ function orderDto(order: any) {
       countdown: paidAtText
     }),
     paidAmount: order.amount,
+    address: order.address ? {
+      id: order.address.id,
+      name: order.address.name,
+      phone: order.address.phone,
+      detail: order.address.detail,
+      isDefault: order.address.isDefault
+    } : undefined,
     logistics: hasLogistics ? {
       company: order.shippingCompany,
       trackingNo: order.trackingNo,
@@ -200,11 +210,15 @@ router.get(
     const room = liveRoomDto(live);
     const queue = live.products.map((item: any) => productDto(item.product));
     const runningAuction = live.auctions.find((auction: any) => auction.status === "RUNNING");
-    const ranking = (runningAuction?.bids ?? []).map((bid: any, index: number) => ({
+    const ranking = Array.from((runningAuction?.bids ?? []).reduce((bestByUser: Map<string, any>, bid: any) => {
+      const current = bestByUser.get(bid.userId);
+      if (!current || bid.amount > current.amount) bestByUser.set(bid.userId, bid);
+      return bestByUser;
+    }, new Map<string, any>()).values()).sort((a: any, b: any) => b.amount - a.amount).map((bid: any, index: number) => ({
       rank: index + 1,
       user: bid.user.nickname,
       price: bid.amount,
-      count: 1,
+      count: (runningAuction?.bids ?? []).filter((item: any) => item.userId === bid.userId).length,
       status: index === 0 ? "领先中" : "已被超越",
       mine: bid.userId === res.locals.user.id
     }));
@@ -252,17 +266,35 @@ router.post(
   requireAuth,
   requireRole("CUSTOMER"),
   asyncHandler(async (req, res) => {
-    const order = await prisma.order.findFirst({ where: { id: req.params.id, buyerId: res.locals.user.id } });
-    if (!order) {
-      res.status(404).json({ message: "订单不存在或无权限" });
-      return;
+    try {
+      const updated = await payCustomerOrder(req.params.id, res.locals.user.id, orderInclude);
+      res.json({ order: orderDto(updated), message: "支付成功" });
+    } catch (error) {
+      if (error instanceof OrderServiceError) {
+        res.status(error.statusCode).json({ message: error.message });
+        return;
+      }
+      throw error;
     }
-    if (order.status !== "PENDING_PAYMENT") {
-      res.status(409).json({ message: "当前订单不需要支付" });
-      return;
+  })
+);
+
+router.post(
+  "/orders/:id/address",
+  requireAuth,
+  requireRole("CUSTOMER"),
+  asyncHandler(async (req, res) => {
+    const addressId = String(req.body.addressId ?? "");
+    try {
+      const updated = await assignCustomerOrderAddress(req.params.id, res.locals.user.id, addressId, orderInclude);
+      res.json({ order: orderDto(updated), message: "收货地址已更新" });
+    } catch (error) {
+      if (error instanceof OrderServiceError) {
+        res.status(error.statusCode).json({ message: error.message });
+        return;
+      }
+      throw error;
     }
-    const updated = await prisma.order.update({ where: { id: order.id }, data: { status: "PAID" }, include: orderInclude });
-    res.json({ order: orderDto(updated), message: "支付成功" });
   })
 );
 

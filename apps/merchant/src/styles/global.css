@@ -2876,6 +2876,18 @@ td small {
   min-width: 0;
 }
 
+.chart-empty-none {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  border: 1px dashed #d7e0ec;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #8a95a8;
+  font-size: 28px;
+  font-weight: 900;
+}
+
 .chart-axis {
   display: flex;
   align-items: center;
@@ -3838,6 +3850,11 @@ td small {
   color: #ff4d4f;
 }
 
+.queue-item-actions button:disabled {
+  cursor: not-allowed;
+  color: #b8c1cf;
+}
+
 .editor-add-list button {
   min-height: 32px;
   padding: 0 12px;
@@ -4044,6 +4061,32 @@ td small {
 .console-status-banner > svg {
   justify-self: end;
   color: #bdd3ff;
+}
+
+.console-create-live-empty {
+  display: grid;
+  min-height: min(62vh, 520px);
+  place-items: center;
+}
+
+.console-create-live-empty .btn {
+  min-width: 180px;
+  min-height: 52px;
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+.console-scheduled-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.console-scheduled-scroll {
+  max-height: min(62vh, 560px);
+}
+
+.console-scheduled-panel .live-row-actions {
+  grid-template-columns: repeat(2, minmax(92px, 1fr));
 }
 
 .console-layout {
@@ -4940,7 +4983,20 @@ td small {
   grid-template-columns: minmax(0, 1fr) 28px auto;
 }
 
-.console-queue-panel .auction-queue button {
+.console-queue-panel .auction-queue-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.console-queue-panel .auction-queue-card.active .auction-queue-select {
+  background: #fff8ef;
+  border-color: #ffb15c;
+  box-shadow: inset 0 0 0 1px #ffb15c, 0 12px 28px rgba(255, 161, 64, 0.13);
+}
+
+.console-queue-panel .auction-queue-select {
   grid-template-columns: 34px 58px minmax(0, 1fr) auto;
   min-height: 76px;
   padding: 10px 14px;
@@ -4957,23 +5013,17 @@ td small {
   padding-right: 4px;
 }
 
-.console-queue-panel .auction-queue button:hover {
+.console-queue-panel .auction-queue-select:hover {
   border-color: #9ec5ff;
   transform: translateY(-1px);
   box-shadow: 0 12px 26px rgba(22, 48, 86, 0.08);
 }
 
-.console-queue-panel .auction-queue button:disabled {
+.console-queue-panel .auction-queue-select:disabled {
   cursor: not-allowed;
   opacity: 0.72;
   transform: none;
   box-shadow: none;
-}
-
-.console-queue-panel .auction-queue button.active {
-  background: #fff8ef;
-  border-color: #ffb15c;
-  box-shadow: inset 0 0 0 1px #ffb15c, 0 12px 28px rgba(255, 161, 64, 0.13);
 }
 
 .console-queue-panel .auction-queue em {
@@ -4984,6 +5034,28 @@ td small {
   border-radius: 999px;
   text-align: center;
   font-size: 14px;
+}
+
+.console-queue-panel .queue-remove-button {
+  display: inline-flex;
+  width: 74px;
+  min-height: 76px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 10px;
+  color: #d92d20;
+  background: #fff5f5;
+  border: 1px solid #ffd1d1;
+  border-radius: 8px;
+  font-weight: 900;
+}
+
+.console-queue-panel .queue-remove-button:disabled {
+  cursor: not-allowed;
+  color: #a7b0bf;
+  background: #f4f7fb;
+  border-color: #e1e8f2;
 }
 
 @keyframes merchant-fade-in {

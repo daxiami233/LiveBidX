@@ -1,0 +1,21 @@
+ALTER TYPE "AuctionStatus" ADD VALUE IF NOT EXISTS 'CANCELLED';
+
+ALTER TABLE "Auction"
+  ADD COLUMN IF NOT EXISTS "capPrice" INTEGER,
+  ADD COLUMN IF NOT EXISTS "autoExtendSec" INTEGER NOT NULL DEFAULT 15;
+
+ALTER TABLE "Order"
+  ADD COLUMN IF NOT EXISTS "addressId" TEXT;
+
+CREATE INDEX IF NOT EXISTS "Order_addressId_idx" ON "Order"("addressId");
+
+ALTER TABLE "Order"
+  ADD CONSTRAINT "Order_addressId_fkey"
+  FOREIGN KEY ("addressId") REFERENCES "Address"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE "Auction" DROP CONSTRAINT IF EXISTS "Auction_liveSessionId_fkey";
+ALTER TABLE "Auction"
+  ADD CONSTRAINT "Auction_liveSessionId_fkey"
+  FOREIGN KEY ("liveSessionId") REFERENCES "LiveSession"("id")
+  ON DELETE SET NULL ON UPDATE CASCADE;
